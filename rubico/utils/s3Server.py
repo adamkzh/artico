@@ -91,6 +91,71 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _object_exists(bucket: str, object_key: str) -> bool:
+    try:
+        s3_client.head_object(Bucket=bucket, Key=object_key)
+        return True
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+
+
+def get_presigned_url_by_object_key(
+    object_key: str,
+    expiration_seconds: int = 300,
+    bucket_name: Optional[str] = None
+) -> Optional[str]:
+    """
+    Returns a pre-signed URL for an object key if it exists, otherwise None.
+    """
+    bucket = bucket_name or S3_BUCKET_NAME
+    try:
+        if not _object_exists(bucket, object_key):
+            return None
+        return s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket, 'Key': object_key},
+            ExpiresIn=expiration_seconds
+        )
+    except Exception as e:
+        logger.error(
+            f"[get_presigned_url_by_object_key] Error for key {object_key}: {e}",
+            exc_info=True
+        )
+        return None
+
+
+def upload_bytes_and_get_presigned_url(
+    file_bytes: bytes,
+    object_key: str,
+    expiration_seconds: int = 300,
+    content_type: str = "audio/mpeg",
+    bucket_name: Optional[str] = None
+) -> str:
+    """
+    Uploads file bytes to S3 using a specific object key and returns a pre-signed URL.
+    """
+    bucket = bucket_name or S3_BUCKET_NAME
+    try:
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=object_key,
+            Body=file_bytes,
+            ContentType=content_type,
+        )
+        return s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': bucket, 'Key': object_key},
+            ExpiresIn=expiration_seconds
+        )
+    except NoCredentialsError:
+        raise Exception("AWS credentials not found. Please check your environment variables.")
+    except ClientError as e:
+        raise Exception(f"Failed to upload or generate URL: {e}")
+
+
 def get_presigned_url_by_session_id(
         session_id: str,
         expiration_seconds: int = 300,
@@ -148,4 +213,3 @@ def get_presigned_url_by_session_id(
             f"[get_presigned_url_by_session_id] Error while getting presigned url for session_id {session_id}: {e}",
             exc_info=True)
         return None
-

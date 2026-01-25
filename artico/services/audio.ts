@@ -1,5 +1,55 @@
 import { saveAudioToFileSystem } from '../utils/fileSystem';
-import { IP_ADDRESS } from '../utils/config';
+import { API_BASE_URL } from '../utils/config';
+import { hashString } from '../utils/hash';
+
+export const getTtsStreamUrl = (text: string, voice: string = 'alloy') => {
+  const encodedText = encodeURIComponent(text);
+  const encodedVoice = encodeURIComponent(voice);
+  return `${API_BASE_URL}/api/tts_stream?text=${encodedText}&voice=${encodedVoice}`;
+};
+
+export const getTtsCacheKey = (text: string, voice: string = 'alloy') => {
+  return hashString(`${voice}:${text}`);
+};
+
+export const getCachedTtsUrl = async (cacheKey: string): Promise<string | null> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/tts_cache?cache_key=${encodeURIComponent(cacheKey)}`);
+    if (!response.ok) {
+      return null;
+    }
+    const data = await response.json();
+    return data.audio_url || null;
+  } catch (error) {
+    console.error('Error fetching cached TTS URL:', error);
+    return null;
+  }
+};
+
+export const cacheTtsAudio = async (
+  text: string,
+  voice: string = 'alloy',
+  cacheKey?: string
+): Promise<{ audio_url: string | null; cache_key: string }> => {
+  const response = await fetch(`${API_BASE_URL}/api/tts_cache`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      text,
+      voice,
+      cache_key: cacheKey,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`HTTP ${response.status}: ${errorText}`);
+  }
+
+  return await response.json();
+};
 
 
 interface PollAudioOptions {
@@ -19,7 +69,7 @@ export const pollAudioUrl = ({
 
   const poll = async () => {
     try {
-      const response = await fetch(`http://${IP_ADDRESS}:8000/api/audio_url?session_id=${sessionId}`);
+      const response = await fetch(`${API_BASE_URL}/api/audio_url?session_id=${sessionId}`);
       const data = await response.json();
 
       if (data.audio_url) {

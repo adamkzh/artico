@@ -1,5 +1,5 @@
 import * as ImageManipulator from 'expo-image-manipulator';
-import { IP_ADDRESS } from '../utils/config';
+import { API_BASE_URL } from '../utils/config';
 
 export interface ArtworkInfo {
   title: string;
@@ -50,12 +50,9 @@ export const identifyArtwork = async (imageUri: string, language: string = 'en',
       formData.append('language', language);
       formData.append('role', role);
 
-      const response = await fetch(`http://${IP_ADDRESS}:8000/api/recognize`, {
+      const response = await fetch(`${API_BASE_URL}/api/recognize`, {
         method: 'POST',
         body: formData,
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        },
       });
 
       if (!response.ok) {
@@ -78,5 +75,4 @@ export const identifyArtwork = async (imageUri: string, language: string = 'en',
     }
   }
 };
-
 

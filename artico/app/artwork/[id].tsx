@@ -2,14 +2,15 @@ import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, TextInput, KeyboardAvoidingView, Platform, SafeAreaView, Alert, ImageBackground } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { getArtwork, updateArtwork, toggleArtworkLike } from '../../database/artworks';
+import { getArtwork, toggleArtworkLike } from '../../database/artworks';
 import { addMessage, getMessagesByArtwork, Message } from '../../database/messages';
 import { useLanguage } from '../../utils/i18n/LanguageContext';
 import { generateResponse } from '../../services/chat';
-import { Audio } from 'expo-av';
-import { pollAudioUrl } from '../../services/audio';
+import { cacheTtsAudio, getCachedTtsUrl, getTtsCacheKey, getTtsStreamUrl } from '../../services/audio';
+import { getCachedAudioUri, saveAudioToCache } from '../../utils/fileSystem';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import { BlurView } from 'expo-blur';
-import { useFocusEffect } from '@react-navigation/native';
+import { useIsFocused } from '@react-navigation/native';
 
 export default function ArtworkDetail() {
   const { id, from } = useLocalSearchParams();
@@ -20,25 +21,30 @@ export default function ArtworkDetail() {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isAudioReady, setIsAudioReady] = useState(false);
   const [shouldRenderImage, setShouldRenderImage] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const [localAudioUri, setLocalAudioUri] = useState<string | null>(null);
+  const [audioSource, setAudioSource] = useState<string | null>(null);
   const [isLiked, setIsLiked] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+  const isFocused = useIsFocused();
+  const player = useAudioPlayer(audioSource ?? null);
+  const status = useAudioPlayerStatus(player);
+  const isPlaying = status.playing;
+  const isAudioReady = !!audioSource;
+  const ttsVoice = 'alloy';
 
   
   useEffect(() => {
     // Configure audio for background playback
     const setupAudio = async () => {
       try {
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true,
-          shouldDuckAndroid: true,
-          interruptionModeIOS: 1, // DoNotMix
-          interruptionModeAndroid: 1, // DoNotMix
+        await setAudioModeAsync({
+          playsInSilentMode: true,
+          interruptionMode: 'doNotMix',
+          allowsRecording: false,
+          shouldPlayInBackground: true,
+          shouldRouteThroughEarpiece: false,
         });
       } catch (error) {
         console.error('Error setting up audio mode:', error);
@@ -47,19 +53,31 @@ export default function ArtworkDetail() {
     setupAudio();
   }, []);
 
-  useFocusEffect(
-    React.useCallback(() => {
-      return () => {
-        if (sound) {
-          sound.stopAsync();
-          setIsPlaying(false);
-        }
-      };
-    }, [sound])
-  );
+  useEffect(() => {
+    if (isFocused) return;
+    if (!status.isLoaded || !status.playing) return;
+
+    try {
+      player.pause();
+    } catch (error) {
+      console.warn('Error pausing audio:', error);
+    }
+  }, [isFocused, player, status.isLoaded, status.playing]);
+
+  useEffect(() => {
+    if (status.playing) return;
+    const nextSource = localAudioUri ?? streamUrl;
+    if (nextSource !== audioSource) {
+      setAudioSource(nextSource ?? null);
+    }
+  }, [audioSource, localAudioUri, status.playing, streamUrl]);
 
   useEffect(() => {
     const loadArtwork = async () => {
+      setLocalAudioUri(null);
+      setStreamUrl(null);
+      setAudioSource(null);
+
       const artworkData = await getArtwork(id as string);
       if (artworkData) {
         if (artworkData?.image_uri) {
@@ -74,46 +92,46 @@ export default function ArtworkDetail() {
         setIsLiked(artworkData.liked || false);
         const messages = await getMessagesByArtwork(artworkData.id);
         setMessages(messages);
-        if (artworkData.audio_url) {
-          try {
-            const { sound: newSound } = await Audio.Sound.createAsync(
-              { uri: artworkData.audio_url },
-              { shouldPlay: false }
-            );
-            setSound(newSound);
-            setAudioUrl(artworkData.audio_url);
-            setIsAudioReady(true);
-          } catch (error) {
-            console.error('Error loading audio:', error);
+        if (artworkData.description) {
+          const cacheKey = getTtsCacheKey(artworkData.description, ttsVoice);
+
+          const cachedLocalUri = await getCachedAudioUri(cacheKey);
+          if (cachedLocalUri) {
+            setLocalAudioUri(cachedLocalUri);
+            setStreamUrl(null);
+            return;
           }
+
+          const cachedRemoteUrl = await getCachedTtsUrl(cacheKey);
+          if (cachedRemoteUrl) {
+            const savedUri = await saveAudioToCache(cachedRemoteUrl, cacheKey);
+            setLocalAudioUri(savedUri);
+            setStreamUrl(null);
+            return;
+          }
+
+          const nextStreamUrl = getTtsStreamUrl(artworkData.description, ttsVoice);
+          setStreamUrl(nextStreamUrl);
+
+          // Kick off caching in the background for future plays.
+          cacheTtsAudio(artworkData.description, ttsVoice, cacheKey)
+            .then(async (result) => {
+              if (!result.audio_url) return;
+              const savedUri = await saveAudioToCache(result.audio_url, result.cache_key);
+              setLocalAudioUri(savedUri);
+            })
+            .catch((error) => {
+              console.warn('Error caching TTS audio:', error);
+            });
+        } else {
+          setStreamUrl(null);
+          setLocalAudioUri(null);
+          setAudioSource(null);
         }
       }
     };
     loadArtwork();
   }, [id]);
-
-  useEffect(() => {
-    if (artwork && !audioUrl && artwork.session_id && from === 'loading') {
-      const stopPolling = pollAudioUrl({
-        sessionId: artwork.session_id,
-        onAudioReady: async (localAudioUri) => {
-          try {
-            const updatedArtwork = { ...artwork, audio_url: localAudioUri };
-            await updateArtwork(updatedArtwork);
-            setArtwork(updatedArtwork);
-            setAudioUrl(localAudioUri);
-            setIsAudioReady(true);
-          } catch (error) {
-            console.error("Error updating artwork with audio URL:", error);
-          }
-        },
-        onError: (error) => {
-          console.error("Audio polling error:", error);
-        }
-      });
-      return stopPolling;
-    }
-  }, [artwork?.id, audioUrl, from]);
 
   const handleSend = async () => {
     if (!inputText.trim() || isLoading) return;
@@ -153,7 +171,6 @@ export default function ArtworkDetail() {
 
       await addMessage(assistantMessage);
       setMessages(prev => [...prev, { ...assistantMessage, id: `msg_${Date.now()}`, type: 'message', created_at: Date.now() }]);
-      setIsAudioReady(true);
       setTimeout(() => {
         scrollViewRef.current?.scrollToEnd({ animated: true });
       }, 100);
@@ -164,31 +181,21 @@ export default function ArtworkDetail() {
     }
   };
 
-  const handlePlayPause = async (messageId: string, audioPath: string) => {
+  const handlePlayPause = async () => {
     try {
-      if (sound) {
-        if (isPlaying) {
-          await sound.pauseAsync();
-          setIsPlaying(false);
-        } else {
-          await sound.playAsync();
-          setIsPlaying(true);
-        }
-      } else {
-        console.log("Creating new sound for:", audioPath);
-        const { sound: newSound } = await Audio.Sound.createAsync(
-          { uri: audioPath },
-          { shouldPlay: true }
-        );
-        setSound(newSound);
-        setIsPlaying(true);
+      if (!audioSource) return;
 
-        newSound.setOnPlaybackStatusUpdate((status) => {
-          if (status.isLoaded && status.didJustFinish) {
-            setIsPlaying(false);
-          }
-        });
+      if (status.playing) {
+        player.pause();
+        return;
       }
+
+      const duration = status.duration || 0;
+      if (duration > 0 && status.currentTime >= duration) {
+        await player.seekTo(0);
+      }
+
+      player.play();
     } catch (error) {
       console.error('Error playing audio:', error);
     }
@@ -309,8 +316,8 @@ export default function ArtworkDetail() {
                           isAudioReady && styles.titleAudioButtonActive
                         ]}
                         onPress={() => {
-                          if (!isAudioReady || !audioUrl) return;
-                          handlePlayPause('audio', audioUrl);
+                          if (!isAudioReady || !audioSource) return;
+                          handlePlayPause();
                         }}
                         disabled={!isAudioReady}
                       >

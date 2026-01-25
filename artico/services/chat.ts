@@ -1,4 +1,4 @@
-import { IP_ADDRESS } from '../utils/config';
+import { API_BASE_URL } from '../utils/config';
 
 interface ChatResponse {
   text: string;
@@ -33,7 +33,7 @@ export const generateResponse = async (
       message_history: messageHistory
     };
 
-    const response = await fetch(`http://${IP_ADDRESS}:8000/api/followup`, {
+    const response = await fetch(`${API_BASE_URL}/api/followup`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

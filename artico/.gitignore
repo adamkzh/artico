@@ -8,8 +8,11 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
+.expo-shared/
 
 # Native
+ios/
+android/
 *.orig.*
 *.jks
 *.p8

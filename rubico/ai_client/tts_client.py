@@ -1,16 +1,30 @@
-import os
-from datetime import datetime
 from openai import OpenAI
+from typing import Iterable
 
 client = OpenAI()
 
-def synthesize_speech(text):
-    response = client.audio.speech.create(
-        model="gpt-4o-mini-tts",      # 注意：openai 官方是 tts-1 或 tts-1-hd，如果你用 gpt-4o tts 要确认一下
-        voice="alloy",      # 可选: alloy, shimmer, echo, fable, nova
-        input=text
-    )
+def synthesize_speech_stream(
+    text: str,
+    voice: str = "alloy",
+    model: str = "gpt-4o-mini-tts",
+) -> Iterable[bytes]:
+    """
+    Stream audio bytes from OpenAI TTS so playback can start sooner.
+    """
+    with client.audio.speech.with_streaming_response.create(
+        model=model,
+        voice=voice,
+        input=text,
+    ) as response:
+        for chunk in response.iter_bytes():
+            yield chunk
 
-    audio_bytes = response.content
-
-    return audio_bytes
+def synthesize_speech(
+    text: str,
+    voice: str = "alloy",
+    model: str = "gpt-4o-mini-tts",
+) -> bytes:
+    """
+    Backwards-compatible helper that materializes the streamed audio.
+    """
+    return b"".join(synthesize_speech_stream(text, voice=voice, model=model))

@@ -6,3 +6,4 @@ pydantic
 gtts
 python-multipart
 boto3
+google-genai
