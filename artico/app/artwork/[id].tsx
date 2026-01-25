@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, TextInput, KeyboardAvoidingView, Platform, SafeAreaView, Alert, ImageBackground } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, TextInput, KeyboardAvoidingView, Platform, SafeAreaView, Alert, ImageBackground, ActivityIndicator } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { getArtwork, toggleArtworkLike } from '../../database/artworks';
@@ -27,11 +27,14 @@ export default function ArtworkDetail() {
   const [audioSource, setAudioSource] = useState<string | null>(null);
   const [isLiked, setIsLiked] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
+  const autoPlayRef = useRef<string | null>(null);
   const isFocused = useIsFocused();
   const player = useAudioPlayer(audioSource ?? null);
   const status = useAudioPlayerStatus(player);
   const isPlaying = status.playing;
-  const isAudioReady = !!audioSource;
+  const isStreamSource = !!streamUrl && audioSource === streamUrl;
+  const isStreamLoading = isStreamSource && !status.isLoaded;
+  const isAudioReady = !!audioSource && (!isStreamSource || status.isLoaded);
   const ttsVoice = 'alloy';
 
   
@@ -71,6 +74,20 @@ export default function ArtworkDetail() {
       setAudioSource(nextSource ?? null);
     }
   }, [audioSource, localAudioUri, status.playing, streamUrl]);
+
+  useEffect(() => {
+    if (!streamUrl) return;
+    if (audioSource !== streamUrl) return;
+    if (!status.isLoaded || status.playing) return;
+    if (autoPlayRef.current === streamUrl) return;
+
+    autoPlayRef.current = streamUrl;
+    try {
+      player.play();
+    } catch (error) {
+      console.warn('Error auto-playing stream audio:', error);
+    }
+  }, [audioSource, player, status.isLoaded, status.playing, streamUrl]);
 
   useEffect(() => {
     const loadArtwork = async () => {
@@ -183,7 +200,7 @@ export default function ArtworkDetail() {
 
   const handlePlayPause = async () => {
     try {
-      if (!audioSource) return;
+      if (!isAudioReady || !audioSource) return;
 
       if (status.playing) {
         player.pause();
@@ -321,11 +338,18 @@ export default function ArtworkDetail() {
                         }}
                         disabled={!isAudioReady}
                       >
-                        <Ionicons 
-                          name={isPlaying ? "pause" : "play"} 
-                          size={24} 
-                          color={isAudioReady ? "#FFFFFF" : "#666666"} 
-                        />
+                        {isStreamLoading ? (
+                          <ActivityIndicator
+                            size="small"
+                            color={isAudioReady ? "#FFFFFF" : "#666666"}
+                          />
+                        ) : (
+                          <Ionicons
+                            name={isPlaying ? "pause" : "play"}
+                            size={24}
+                            color={isAudioReady ? "#FFFFFF" : "#666666"}
+                          />
+                        )}
                       </TouchableOpacity>
                     </View>
                   </View>
